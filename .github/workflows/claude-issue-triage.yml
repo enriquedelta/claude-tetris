@@ -1,0 +1,99 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # No dispares esto si el issue menciona @claude: ese caso lo atiende claude.yml
+    if: >
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Issue Triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh api:*),Bash(gh label list:*),Bash(gh label create:*)"
+          prompt: |
+            Estás triageando el issue #${{ github.event.issue.number }} del repo
+            ${{ github.repository }} (Tetris en vanilla JS, ver CLAUDE.md para arquitectura).
+
+            Objetivo: analizar el issue contra el código real, asignarle labels apropiados
+            y publicar un diagnóstico técnico en español. NO implementes la solución todavía.
+
+            Pasos:
+
+            1. Lee el issue completo, incluidos comentarios existentes:
+               gh issue view ${{ github.event.issue.number }} --json title,body,labels,comments
+
+            2. Lee CLAUDE.md para entender la arquitectura (game.js: board, piezas, colisiones,
+               wall kicks, clearLines, scoring, render loop, controles). Usa Read/Grep/Glob sobre
+               game.js, index.html y style.css para localizar el código exacto relacionado con lo
+               que reporta o pide el issue (funciones, constantes, líneas concretas).
+
+            3. Lista los labels existentes con `gh label list`. Elige los que apliquen. Si ninguno
+               encaja bien, puedes crear uno nuevo con
+               `gh label create "<nombre>" --color <hex> --description "<desc>"` (colores
+               consistentes con los ya usados en el repo). Aplica los labels con
+               `gh issue edit ${{ github.event.issue.number }} --add-label "a,b"`.
+               No elimines labels que ya haya puesto una persona.
+
+            4. Publica (o actualiza) un único comentario "sticky" con el diagnóstico, usando
+               exactamente esta plantilla en español, rellenada con contenido real y específico
+               (referencias tipo `game.js:42`, nombres de funciones/constantes reales — nunca
+               genérico):
+
+               <!-- claude-triage -->
+               ## 🔍 Diagnóstico automático
+
+               **Tipo**: bug | mejora | duda | documentación
+               **Área**: renderizado / lógica de juego / controles / UI / puntuación
+               **Complejidad estimada**: baja | media | alta
+
+               ### Resumen del problema
+               <1-2 frases>
+
+               ### Causa raíz / estado actual del código
+               <referencias concretas al código>
+
+               ### Archivos afectados
+               - `archivo` — qué habría que tocar
+
+               ### Solución propuesta
+               <pasos concretos de implementación>
+
+               ### Riesgos y consideraciones
+               <o "Ninguno">
+
+               ### Verificación
+               <cómo comprobarlo manualmente en el navegador>
+
+               ---
+               *Análisis generado automáticamente. Comenta `@claude implementa esta solución` para aplicarla.*
+
+            5. Para el sticky: busca en los comentarios ya listados en el paso 1 uno cuyo body
+               contenga el marcador `<!-- claude-triage -->`. Si existe, edítalo con:
+               gh api --method PATCH repos/${{ github.repository }}/issues/comments/<id> -f body='<nuevo contenido>'
+               Si no existe, créalo con:
+               gh issue comment ${{ github.event.issue.number }} --body '<contenido>'
+
+            Restricciones: no modifiques archivos del repositorio, no abras pull requests, no
+            cierres el issue, no elimines labels puestos por humanos.
